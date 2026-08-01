@@ -1,0 +1,149 @@
+name: Terraform Infrastructure
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  TF_WORKING_DIR: terraform
+  TF_VAR_FILE: environments/dev.tfvars
+
+jobs:
+
+  # 1. TERRAFORM PLAN
+  terraform-plan:
+    name: Terraform Plan
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # Checkout source code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # Install Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+
+      # Authenticate GitHub Actions with AWS using OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
+
+
+      # Check Terraform formatting
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+
+      # Initialize Terraform
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+  
+      # Validate Terraform configuration
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+
+      # Generate Terraform plan
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan \
+            -input=false \
+            -var-file="${{ env.TF_VAR_FILE }}" \
+            -out=tfplan
+
+
+      # Upload the exact plan file
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
+
+
+
+  # 2. TERRAFORM APPLY
+  terraform-apply:
+    name: Terraform Apply
+
+    needs:
+      - terraform-plan
+
+
+    # Apply is allowed ONLY when workflow runs from main branch.
+    # PRs will never reach Terraform Apply.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # GitHub Environment protection
+    # This is where the manual approval happens.
+    environment:
+      name: dev
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+
+      # Checkout the same repository commit
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # Install Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+
+      # Authenticate GitHub Actions with AWS using OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
+
+
+      # Initialize Terraform
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+
+      # Download the EXACT plan generated earlier
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform
+
+
+      # Apply the exact reviewed plan
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -input=false tfplan
