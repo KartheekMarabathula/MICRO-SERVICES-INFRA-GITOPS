@@ -17,3 +17,13 @@ variable "github_repository" {
   description = "GitHub repository allowed to assume the Terraform IAM role."
   type        = string
 }
+
+variable "github_owner_id" {
+  description = "GitHub repository owner ID used in the OIDC subject claim."
+  type        = string
+}
+
+variable "github_repository_id" {
+  description = "GitHub repository ID used in the OIDC subject claim."
+  type        = string
+}
