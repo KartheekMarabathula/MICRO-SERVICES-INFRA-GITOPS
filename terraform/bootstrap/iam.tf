@@ -49,3 +49,8 @@ resource "aws_iam_role" "github_actions_terraform" {
     ManagedBy = "Terraform"
   }
 }
+
+resource "aws_iam_role_policy_attachment" "github_actions_admin" {
+  role       = aws_iam_role.github_actions_terraform.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
