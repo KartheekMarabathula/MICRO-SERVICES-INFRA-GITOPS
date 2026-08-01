@@ -13,8 +13,13 @@ variable "state_bucket_name" {
   type        = string
 }
 
+variable "github_owner" {
+  description = "GitHub repository owner."
+  type        = string
+}
+
 variable "github_repository" {
-  description = "GitHub repository allowed to assume the Terraform IAM role."
+  description = "GitHub repository name."
   type        = string
 }
 
