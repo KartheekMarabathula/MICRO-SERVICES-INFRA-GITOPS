@@ -14,6 +14,16 @@ on:
       - "terraform/**"
 
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - stage
+        default: dev
 
 permissions:
   id-token: write
@@ -22,29 +32,67 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   TF_WORKING_DIR: terraform
-  TF_VAR_FILE: environments/dev.tfvars
 
 jobs:
 
-  # 1. TERRAFORM PLAN
-  terraform-plan:
-    name: Terraform Plan
-
+  # 1. DETERMINE ENVIRONMENT
+  determine-environment:
+    name: Determine Environment
     runs-on: ubuntu-latest
+
+    outputs:
+      environment: ${{ steps.environment.outputs.environment }}
 
     steps:
 
-      # Checkout source code
+      - name: Determine target environment
+        id: environment
+        shell: bash
+        run: |
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+
+            ENVIRONMENT="${{ inputs.environment }}"
+
+          else
+
+            # Normal PR / push flow currently targets DEV.
+            ENVIRONMENT="dev"
+
+          fi
+
+          echo "Target environment = $ENVIRONMENT"
+
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+
+  # 2. TERRAFORM PLAN
+  terraform-plan:
+    name: Terraform Plan
+
+    needs:
+      - determine-environment
+
+    runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+
+    steps:
+
+  
+      # Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # Install Terraform
+
+      # Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
 
-      # Authenticate GitHub Actions with AWS using OIDC
+      # Configure AWS OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -52,76 +100,98 @@ jobs:
           role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
 
 
-      # Check Terraform formatting
+
+      # Terraform Format
       - name: Terraform Format Check
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform fmt -check -recursive
 
 
-      # Initialize Terraform new change
+
+      # Terraform Init
+      # Backend is selected automatically based on environment.
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init -input=false -backend-config="backend.hcl"
+        run: |
+          terraform init \
+            -input=false \
+            -backend-config="backends/${ENVIRONMENT}.hcl"
 
-  
-      # Validate Terraform configuration
+
+
+      # Terraform Validate
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
 
-      # Generate Terraform plan
+
+      # Terraform Plan
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan \
             -input=false \
-            -var-file="${{ env.TF_VAR_FILE }}" \
+            -var-file="environments/${ENVIRONMENT}.tfvars" \
             -out=tfplan
 
 
-      # Upload the exact plan file
+
+      # Upload exact Terraform plan
       - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan
+          name: terraform-plan-${{ env.ENVIRONMENT }}
           path: terraform/tfplan
 
 
 
-  # 2. TERRAFORM APPLY
+  # 3. TERRAFORM APPLY
   terraform-apply:
     name: Terraform Apply
 
     needs:
+      - determine-environment
       - terraform-plan
 
+    # Apply only after merge/push to main OR manual dispatch.
+    # PR will NEVER apply.
 
-    # Apply is allowed ONLY when workflow runs from main branch.
-    # PRs will never reach Terraform Apply.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      (
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/main'
+      )
+      ||
+      github.event_name == 'workflow_dispatch'
+
+    env:
+      ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
 
     # GitHub Environment protection
-    # This is where the manual approval happens.
+    # dev/test/stage environments can have their own
+    # approval rules.
+
     environment:
-      name: dev
+      name: ${{ needs.determine-environment.outputs.environment }}
 
     runs-on: ubuntu-latest
 
     steps:
 
-
-      # Checkout the same repository commit
+      # Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # Install Terraform
+
+      # Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
 
-      # Authenticate GitHub Actions with AWS using OIDC
+
+      # Configure AWS OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -129,21 +199,27 @@ jobs:
           role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
 
 
-      # Initialize Terraform
+      # Initialize Terraform using environment backend
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init -input=false -backend-config="backend.hcl"
+        run: |
+          terraform init \
+            -input=false \
+            -backend-config="backends/${ENVIRONMENT}.hcl"
 
 
-      # Download the EXACT plan generated earlier
+      # Download exact plan generated by PLAN job
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
         with:
-          name: terraform-plan
+          name: terraform-plan-${{ env.ENVIRONMENT }}
           path: terraform
 
 
-      # Apply the exact reviewed plan
+      # Apply exact reviewed plan
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform apply -input=false tfplan
+        run: |
+          terraform apply \
+            -input=false \
+            tfplan
