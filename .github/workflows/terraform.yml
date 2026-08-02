@@ -35,7 +35,111 @@ env:
 
 jobs:
 
-  # 1. DETERMINE ENVIRONMENT
+
+    # 1. DETECT AFFECTED ENVIRONMENTS
+  detect-changes:
+    name: Detect Changed Environments
+    runs-on: ubuntu-latest
+
+    outputs:
+      dev: ${{ steps.detect.outputs.dev }}
+      test: ${{ steps.detect.outputs.test }}
+      stage: ${{ steps.detect.outputs.stage }}
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed Terraform files
+        id: detect
+        shell: bash
+        run: |
+
+          echo "======================================"
+          echo "Terraform Change Detection"
+          echo "======================================"
+
+          DEV=false
+          TEST=false
+          STAGE=false
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          echo "BASE_SHA = $BASE_SHA"
+          echo "HEAD_SHA = $HEAD_SHA"
+
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          echo ""
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          echo ""
+
+          while IFS= read -r file; do
+
+            [[ -z "$file" ]] && continue
+
+            echo "Checking: $file"
+
+            # Environment-specific changes
+
+            if [[ "$file" == "terraform/environments/dev.tfvars" ]]; then
+              DEV=true
+            fi
+
+            if [[ "$file" == "terraform/environments/test.tfvars" ]]; then
+              TEST=true
+            fi
+
+            if [[ "$file" == "terraform/environments/stage.tfvars" ]]; then
+              STAGE=true
+            fi
+
+
+            # Shared Terraform changes
+            if [[ "$file" == terraform/modules/* ]] ||
+               [[ "$file" == "terraform/main.tf" ]] ||
+               [[ "$file" == "terraform/variables.tf" ]] ||
+               [[ "$file" == "terraform/providers.tf" ]] ||
+               [[ "$file" == "terraform/versions.tf" ]] ||
+               [[ "$file" == "terraform/backend.tf" ]] ||
+               [[ "$file" == "terraform/locals.tf" ]] ||
+               [[ "$file" == "terraform/outputs.tf" ]]; then
+
+              echo "Shared Terraform change detected."
+
+              DEV=true
+              TEST=true
+              STAGE=true
+
+            fi
+
+          done <<< "$CHANGED_FILES"
+
+
+          echo ""
+          echo "======================================"
+          echo "Affected environments"
+          echo "======================================"
+
+          echo "DEV   = $DEV"
+          echo "TEST  = $TEST"
+          echo "STAGE = $STAGE"
+
+          echo "dev=$DEV" >> "$GITHUB_OUTPUT"
+          echo "test=$TEST" >> "$GITHUB_OUTPUT"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+
+  # 2. DETERMINE ENVIRONMENT
   determine-environment:
     name: Determine Environment
     runs-on: ubuntu-latest
@@ -66,7 +170,7 @@ jobs:
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
 
-  # 2. TERRAFORM PLAN
+  # 3. TERRAFORM PLAN
   terraform-plan:
     name: Terraform Plan
 
@@ -166,7 +270,7 @@ jobs:
 
 
 
-  # 3. TERRAFORM APPLY
+  # 4. TERRAFORM APPLY
   terraform-apply:
     name: Terraform Apply
 
