@@ -21,3 +21,5 @@ public_subnets = [
   "10.20.101.0/24",
   "10.20.102.0/24"
 ]
+
+# testing test.tfvars file for change detection
