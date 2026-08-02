@@ -20,3 +20,5 @@ public_subnets = [
   "10.30.101.0/24",
   "10.30.102.0/24"
 ]
+
+# Change detection testing
