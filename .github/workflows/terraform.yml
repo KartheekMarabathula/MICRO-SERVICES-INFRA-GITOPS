@@ -170,71 +170,106 @@ jobs:
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
 
-  # 3. TERRAFORM PLAN
+    # 3. TERRAFORM PLAN
   terraform-plan:
-    name: Terraform Plan
+    name: Terraform Plan (${{ matrix.environment }})
 
     needs:
-      - determine-environment
+      - detect-changes
+
+    if: |
+      needs.detect-changes.outputs.dev == 'true' ||
+      needs.detect-changes.outputs.test == 'true' ||
+      needs.detect-changes.outputs.stage == 'true'
 
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - dev
+          - test
+          - stage
+
     env:
-      ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+      ENVIRONMENT: ${{ matrix.environment }}
 
     steps:
 
-  
-      # Checkout
+      - name: Check if environment is affected
+        id: check
+        shell: bash
+        run: |
+
+          case "${ENVIRONMENT}" in
+
+            dev)
+              AFFECTED="${{ needs.detect-changes.outputs.dev }}"
+              ;;
+
+            test)
+              AFFECTED="${{ needs.detect-changes.outputs.test }}"
+              ;;
+
+            stage)
+              AFFECTED="${{ needs.detect-changes.outputs.stage }}"
+              ;;
+
+          esac
+
+          echo "Environment = ${ENVIRONMENT}"
+          echo "Affected = ${AFFECTED}"
+
+          if [[ "$AFFECTED" != "true" ]]; then
+            echo "Environment ${ENVIRONMENT} is not affected."
+            echo "Skipping Terraform plan."
+
+            echo "run_plan=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Environment ${ENVIRONMENT} is affected."
+            echo "Terraform plan will run."
+
+            echo "run_plan=true" >> "$GITHUB_OUTPUT"
+          fi
+
+
       - name: Checkout repository
+        if: steps.check.outputs.run_plan == 'true'
         uses: actions/checkout@v4
 
 
-
-      # Setup Terraform
       - name: Setup Terraform
+        if: steps.check.outputs.run_plan == 'true'
         uses: hashicorp/setup-terraform@v3
 
+
       - name: Debug GitHub Context
+        if: steps.check.outputs.run_plan == 'true'
         run: |
           echo "Repository = ${{ github.repository }}"
           echo "Ref = ${{ github.ref }}"
           echo "Ref Name = ${{ github.ref_name }}"
           echo "Event = ${{ github.event_name }}"
+          echo "Environment = $ENVIRONMENT"
 
 
-      - name: Print OIDC Claims
-        uses: actions/github-script@v7
-        with:
-          script: |
-              const token = await core.getIDToken('sts.amazonaws.com');
-
-              const payload = JSON.parse(
-              Buffer.from(token.split('.')[1], 'base64').toString()
-              );
-
-                console.log(JSON.stringify(payload, null, 2));
-
-
-      # Configure AWS OIDC
       - name: Configure AWS credentials
+        if: steps.check.outputs.run_plan == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
 
 
-
-      # Terraform Format
       - name: Terraform Format Check
+        if: steps.check.outputs.run_plan == 'true'
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform fmt -check -recursive
 
 
-
-      # Terraform Init
-      # Backend is selected automatically based on environment.
       - name: Terraform Init
+        if: steps.check.outputs.run_plan == 'true'
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform init \
@@ -242,16 +277,14 @@ jobs:
             -backend-config="backends/${ENVIRONMENT}.hcl"
 
 
-
-      # Terraform Validate
       - name: Terraform Validate
+        if: steps.check.outputs.run_plan == 'true'
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
 
-
-      # Terraform Plan
       - name: Terraform Plan
+        if: steps.check.outputs.run_plan == 'true'
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan \
@@ -260,12 +293,11 @@ jobs:
             -out=tfplan
 
 
-
-      # Upload exact Terraform plan
       - name: Upload Terraform Plan
+        if: steps.check.outputs.run_plan == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-${{ env.ENVIRONMENT }}
+          name: terraform-plan-${{ matrix.environment }}
           path: terraform/tfplan
 
 
