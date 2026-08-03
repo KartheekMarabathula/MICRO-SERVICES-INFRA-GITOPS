@@ -12,6 +12,7 @@ tfplan
 # Terraform variable files containing secrets
 *.tfvars
 !terraform/environments/*.tfvars
+!terraform/shared/*.tfvars
 
 # Terraform lock file SHOULD be committed
 # .terraform.lock.hcl
