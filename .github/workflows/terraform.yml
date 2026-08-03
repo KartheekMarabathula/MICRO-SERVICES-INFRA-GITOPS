@@ -33,6 +33,7 @@ env:
   AWS_REGION: ap-south-1
   TF_WORKING_DIR: terraform
 
+
 jobs:
 
 
@@ -231,6 +232,10 @@ jobs:
   terraform-plan:
     name: Terraform Plan (${{ matrix.environment }})
 
+    concurrency:
+      group: terraform-${{ github.repository }}-${{ matrix.environment }}
+      cancel-in-progress: false
+
     needs:
       - detect-changes
 
@@ -362,6 +367,10 @@ jobs:
     # 5. TERRAFORM APPLY
   terraform-apply:
     name: Terraform Apply (${{ matrix.environment }})
+
+    concurrency:
+      group: terraform-${{ github.repository }}-${{ matrix.environment }}
+      cancel-in-progress: false
 
     needs:
       - detect-changes
