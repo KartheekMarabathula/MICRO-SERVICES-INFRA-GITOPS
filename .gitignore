@@ -26,3 +26,5 @@ tfplan
 Thumbs.db
 
 test-state-backup.json
+
+shared-state-backup.json
