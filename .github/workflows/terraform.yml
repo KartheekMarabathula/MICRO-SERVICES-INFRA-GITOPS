@@ -139,7 +139,64 @@ jobs:
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
 
-  # 2. DETERMINE ENVIRONMENT
+
+  # 2. BUILD-APPLY-MATRIX job
+  build-apply-matrix:
+    name: Build Apply Matrix
+    runs-on: ubuntu-latest
+
+    needs:
+      - detect-changes
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+
+    - name: Build affected environment matrix
+      id: matrix
+      shell: bash
+      run: |
+
+        echo "======================================"
+        echo "Building Terraform Apply Matrix"
+        echo "======================================"
+
+        ENVIRONMENTS=()
+
+        if [[ "${{ needs.detect-changes.outputs.dev }}" == "true" ]]; then
+          ENVIRONMENTS+=('"dev"')
+        fi
+
+        if [[ "${{ needs.detect-changes.outputs.test }}" == "true" ]]; then
+          ENVIRONMENTS+=('"test"')
+        fi
+
+        if [[ "${{ needs.detect-changes.outputs.stage }}" == "true" ]]; then
+          ENVIRONMENTS+=('"stage"')
+        fi
+
+        if [[ ${#ENVIRONMENTS[@]} -eq 0 ]]; then
+
+          MATRIX='{"environment":[]}'
+
+        else
+
+          MATRIX='{"environment":['
+          MATRIX+=$(IFS=,; echo "${ENVIRONMENTS[*]}")
+          MATRIX+=']}'
+
+        fi
+
+        echo ""
+        echo "Generated Apply Matrix:"
+        echo "$MATRIX"
+        echo ""
+
+        echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"        
+
+
+  # 3. DETERMINE ENVIRONMENT
   determine-environment:
     name: Determine Environment
     runs-on: ubuntu-latest
@@ -170,7 +227,7 @@ jobs:
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
 
 
-    # 3. TERRAFORM PLAN
+    # 4. TERRAFORM PLAN
   terraform-plan:
     name: Terraform Plan (${{ matrix.environment }})
 
@@ -302,18 +359,19 @@ jobs:
 
 
 
-    # 3. TERRAFORM APPLY
+    # 5. TERRAFORM APPLY
   terraform-apply:
     name: Terraform Apply (${{ matrix.environment }})
 
     needs:
       - detect-changes
       - terraform-plan
+      - build-apply-matrix
 
     if: |
       (
-        github.event_name == 'push' &&
-        github.ref == 'refs/heads/main'
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
       )
       ||
       github.event_name == 'workflow_dispatch'
@@ -322,161 +380,51 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        environment:
-          - dev
-          - test
-          - stage
+      matrix: ${{ fromJSON(needs.build-apply-matrix.outputs.matrix) }}
 
     env:
       ENVIRONMENT: ${{ matrix.environment }}
 
-    # GitHub Environment protection
     environment:
       name: ${{ matrix.environment }}
-
     steps:
 
-      # ------------------------------------------------
-      # CHECK WHETHER THIS ENVIRONMENT IS AFFECTED
-      # ------------------------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Check if environment is affected
-        id: check
-        shell: bash
-        run: |
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
 
-          case "${ENVIRONMENT}" in
+    - name: Debug GitHub Context
+      run: |
+        echo "Repository  = ${{ github.repository }}"
+        echo "Ref         = ${{ github.ref }}"
+        echo "Ref Name    = ${{ github.ref_name }}"
+        echo "Event       = ${{ github.event_name }}"
+        echo "Environment = $ENVIRONMENT"
 
-            dev)
-              AFFECTED="${{ needs.detect-changes.outputs.dev }}"
-              ;;
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
 
-            test)
-              AFFECTED="${{ needs.detect-changes.outputs.test }}"
-              ;;
+    - name: Terraform Init
+      working-directory: ${{ env.TF_WORKING_DIR }}
+      run: |
+        terraform init \
+          -input=false \
+          -backend-config="backends/${ENVIRONMENT}.hcl"
 
-            stage)
-              AFFECTED="${{ needs.detect-changes.outputs.stage }}"
-              ;;
+    - name: Download Terraform Plan
+      uses: actions/download-artifact@v4
+      with:
+        name: terraform-plan-${{ env.ENVIRONMENT }}
+        path: terraform
 
-          esac
-
-          echo "Environment = ${ENVIRONMENT}"
-          echo "Affected = ${AFFECTED}"
-
-          if [[ "$AFFECTED" != "true" ]]; then
-
-            echo "Environment ${ENVIRONMENT} is not affected."
-            echo "Skipping Terraform apply."
-
-            echo "run_apply=false" >> "$GITHUB_OUTPUT"
-
-          else
-
-            echo "Environment ${ENVIRONMENT} is affected."
-            echo "Terraform apply will run."
-
-            echo "run_apply=true" >> "$GITHUB_OUTPUT"
-
-          fi
-
-
-      # ------------------------------------------------
-      # CHECKOUT
-      # ------------------------------------------------
-
-      - name: Checkout repository
-        if: steps.check.outputs.run_apply == 'true'
-        uses: actions/checkout@v4
-
-
-      # ------------------------------------------------
-      # TERRAFORM
-      # ------------------------------------------------
-
-      - name: Setup Terraform
-        if: steps.check.outputs.run_apply == 'true'
-        uses: hashicorp/setup-terraform@v3
-
-
-      # ------------------------------------------------
-      # DEBUG
-      # ------------------------------------------------
-
-      - name: Debug GitHub Context
-        if: steps.check.outputs.run_apply == 'true'
-        run: |
-
-          echo "Repository = ${{ github.repository }}"
-          echo "Ref = ${{ github.ref }}"
-          echo "Ref Name = ${{ github.ref_name }}"
-          echo "Event = ${{ github.event_name }}"
-          echo "Environment = $ENVIRONMENT"
-
-
-      # ------------------------------------------------
-      # OIDC
-      # ------------------------------------------------
-
-      - name: Print OIDC Claims
-        if: steps.check.outputs.run_apply == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-
-            const token = await core.getIDToken('sts.amazonaws.com');
-
-            const payload = JSON.parse(
-              Buffer.from(token.split('.')[1], 'base64').toString()
-            );
-
-            console.log(JSON.stringify(payload, null, 2));
-
-
-      - name: Configure AWS credentials
-        if: steps.check.outputs.run_apply == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
-
-
-      # ------------------------------------------------
-      # TERRAFORM INIT
-      # ------------------------------------------------
-
-      - name: Terraform Init
-        if: steps.check.outputs.run_apply == 'true'
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-
-          terraform init \
-            -input=false \
-            -backend-config="backends/${ENVIRONMENT}.hcl"
-
-
-      # ------------------------------------------------
-      # DOWNLOAD EXACT PLAN
-      # ------------------------------------------------
-
-      - name: Download Terraform Plan
-        if: steps.check.outputs.run_apply == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-plan-${{ matrix.environment }}
-          path: terraform
-
-
-      # ------------------------------------------------
-      # APPLY EXACT PLAN
-      # ------------------------------------------------
-
-      - name: Terraform Apply
-        if: steps.check.outputs.run_apply == 'true'
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-
-          terraform apply \
-            -input=false \
-            tfplan
+    - name: Terraform Apply
+      working-directory: ${{ env.TF_WORKING_DIR }}
+      run: |
+        terraform apply \
+          -input=false \
+          tfplan
