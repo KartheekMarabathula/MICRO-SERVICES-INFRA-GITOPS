@@ -1,0 +1,151 @@
+name: Terraform Shared Infrastructure
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/shared/**"
+      - "terraform/backends/shared.hcl"
+      - ".github/workflows/terraform-shared.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/shared/**"
+      - "terraform/backends/shared.hcl"
+      - ".github/workflows/terraform-shared.yml"
+
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_WORKING_DIR: terraform/shared
+  AWS_REGION: ap-south-1
+
+jobs:
+
+  terraform-plan:
+    name: Shared Terraform Plan
+    runs-on: ubuntu-latest
+
+    steps:
+
+
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Configure AWS using GitHub OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # 3. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+
+      # 4. Terraform Format Check
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+
+      # 5. Terraform Init
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init \
+            -reconfigure \
+            -backend-config="../backends/shared.hcl"
+
+
+      # 6. Terraform Validate
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+
+      # 7. Terraform Plan
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan \
+            -var-file="shared.tfvars" \
+            -out=tfplan
+
+
+      # 8. Upload Terraform Plan
+      - name: Upload Terraform Plan
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-terraform-plan
+          path: terraform/shared/tfplan
+
+
+
+  # APPLY
+
+  terraform-apply:
+    name: Shared Terraform Apply
+    needs: terraform-plan
+
+    # Apply only after changes reach main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: shared
+
+    steps:
+
+
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # 2. Configure AWS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::821135789828:role/micro-services-github-actions-terraform
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # 3. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+
+      # 4. Terraform Init
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init \
+            -reconfigure \
+            -backend-config="../backends/shared.hcl"
+
+
+      # 5. Download Plan
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: shared-terraform-plan
+          path: terraform/shared
+
+
+      # 6. Terraform Apply
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan
