@@ -23,3 +23,5 @@ tfplan
 # OS
 .DS_Store
 Thumbs.db
+
+test-state-backup.json

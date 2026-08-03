@@ -5,7 +5,7 @@ environment = "test"
 
 aws_region = "ap-south-1"
 
-vpc_cidr = "10.25.0.0/16"
+vpc_cidr = "10.20.0.0/16"
 
 availability_zones = [
   "ap-south-1a",
