@@ -5,13 +5,25 @@ on:
     branches:
       - main
     paths:
-      - "terraform/**"
+      - "terraform/*.tf"
+      - "terraform/modules/**"
+      - "terraform/environments/**"
+      - "terraform/backends/dev.hcl"
+      - "terraform/backends/test.hcl"
+      - "terraform/backends/stage.hcl"
+      - ".github/workflows/terraform-infrastructure.yml"
 
   push:
     branches:
       - main
     paths:
-      - "terraform/**"
+      - "terraform/*.tf"
+      - "terraform/modules/**"
+      - "terraform/environments/**"
+      - "terraform/backends/dev.hcl"
+      - "terraform/backends/test.hcl"
+      - "terraform/backends/stage.hcl"
+      - ".github/workflows/terraform-infrastructure.yml"
 
   workflow_dispatch:
     inputs:
